@@ -61,7 +61,7 @@ if not PUBLIC_CHANNEL_ID:
 
 # --- File & Season Configuration ---
 SEASONS = {
-    'season1': [
+    'apothecary diaries ss1 dual 1080p': [
         'BQACAgQAAxkBAAEBEWhoImGp0GLWjLBTaJ90ZcIYtdFtvQACtSMAA1AZUQABXCxSF360SzYE', #1
         'BQACAgQAAxkBAAEBEX9oInhdz1T_S7sJEifWD91VL5vO7QACzyMAA1AZUZ107KoTZlUXNgQ', #2
         'BQACAgQAAxkBAAEBFY5oIyNYobHZHWWk2DJ2Hjkx99LgRAAC1CMAA1AZUdl6cVfp1NJENgQ',#3
