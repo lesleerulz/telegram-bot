@@ -1,34 +1,23 @@
 # ===----------------------------------------------------------------------=== #
 #                    Refined Telegram File Share Bot                         #
 # ===----------------------------------------------------------------------=== #
-#
-# Purpose: Shares files (e.g., videos) stored in a private Telegram channel
-#          with users via a public channel interface using inline buttons
-#          and deep-linking. Automatically cleans up sent files after a delay.
-#
-# Workflow:
-# 1. Admin runs `setup_buttons` (or enables it on startup) to post/update
-#    a message with "Season" buttons in the PUBLIC_CHANNEL.
-# 2. User clicks a button (e.g., "Season 1").
-# 3. Button URL (t.me/templer1bot?start=season1) opens a DM chat with the bot.
-# 4. Bot's `start_handler` receives "season1" via deep-link arguments.
-# 5. Bot looks up "season1" in the SEASONS config to get the list of file_ids.
-# 6. Bot sends each file (using its file_id) to the user in the DM.
-# 7. For each sent file message, the bot schedules a job using JobQueue
-#    to delete that specific message after DELETE_AFTER_SECONDS.
-# 8. The `delete_message_job` function runs when scheduled, deleting the file message.
-#
+# ... (your existing comments at the top) ...
 # ===----------------------------------------------------------------------=== #
 
+# 1. KEEP ALIVE IMPORT (Add this at the top)
+from keep_alive import keep_alive
+
+# 2. STANDARD IMPORTS (Your existing imports)
 import os
 import logging
 import asyncio
+# import threading # Not strictly needed here if keep_alive.py handles its own thread
 from telegram import (
     Update,
     Bot,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaDocument # Consider using this for sending multiple docs if needed later
+    InputMediaDocument
 )
 from telegram.ext import (
     Application,
@@ -41,81 +30,50 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 from telegram.error import TelegramError, Forbidden, BadRequest
 
-# === 1. Logging Setup ===
-# Configure logging to see bot activity and errors.
+# === 1. Logging Setup === (Your existing logging setup)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO  # Change to logging.DEBUG for more detailed output
+    level=logging.INFO
 )
-# Suppress overly verbose logs from underlying HTTP library
 logging.getLogger("httpx").setLevel(logging.WARNING)
+# Suppress Flask's default development server logs if too noisy, or let them be for debugging
+logging.getLogger("werkzeug").setLevel(logging.WARNING) # Add this for Flask's server
 logger = logging.getLogger(__name__)
 
-# === 2. Configuration ===
-# Your specific details have been inserted below.
-# You MUST still fill in the SEASONS dictionary with your other actual file_ids.
-
-# --- Critical Configuration ---
-# BOT_TOKEN: Your bot's unique API key from @BotFather
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8085729451:AAEMfsjqZ9TYnYZmbsTROe5WKDBvM-caoRc') # Your Token
-# BOT_USERNAME: Your bot's username (WITHOUT the '@'). Needed for deep links.
-BOT_USERNAME = os.getenv('BOT_USERNAME', 'templer1bot') # Your Username
-
-# --- Channel Configuration ---
-# PRIVATE_CHANNEL_ID: Numeric ID of the private channel where files are stored
-PRIVATE_CHANNEL_ID = os.getenv('PRIVATE_CHANNEL_ID', '-1002668516099') # Your Private Channel ID
-# PUBLIC_CHANNEL_ID: Username or numeric ID of the public channel for buttons
-PUBLIC_CHANNEL_ID = os.getenv('PUBLIC_CHANNEL_ID', '@lesleechannel') # Your Public Channel Username
-
-# --- File & Season Configuration ---
-# SEASONS: Dictionary mapping simple keys (used in deep links) to lists of file IDs.
-# !!! CRITICAL: REPLACE THE REMAINING PLACEHOLDERS BELOW WITH YOUR REAL FILE IDs !!!
-# How to get File IDs:
-#   1. Upload files to your PRIVATE channel (-1002668516099).
-#   2. Forward *each* file message to @RawDataBot or @JsonDumpBot.
-#   3. Find the `file_id` field within the `document` or `video` object.
-#   4. Copy the long string (file_id) and paste it below.
-# IMPORTANT: Bot must be ADMIN in the PRIVATE channel (-1002668516099) to access files by ID.
+# === 2. Configuration === (Your existing configuration)
+# ... (BOT_TOKEN, BOT_USERNAME, PRIVATE_CHANNEL_ID, PUBLIC_CHANNEL_ID, SEASONS, DELETE_AFTER_SECONDS, AUTO_SETUP_BUTTONS_ON_START) ...
+# (Make sure the missing comma in SEASONS['season1'] is fixed here too!)
+# Corrected SEASONS (example part):
 SEASONS = {
-    # Example: Replace 'FILE_ID_...' with YOUR actual file IDs.
     'season1': [
-        'BQACAgQAAxkBAAEBEWhoImGp0GLWjLBTaJ90ZcIYtdFtvQACtSMAA1AZUQABXCxSF360SzYE', #1
-        'BQACAgQAAxkBAAEBEX9oInhdz1T_S7sJEifWD91VL5vO7QACzyMAA1AZUZ107KoTZlUXNgQ', #2
-        'BQACAgQAAxkBAAEBFY5oIyNYobHZHWWk2DJ2Hjkx99LgRAAC1CMAA1AZUdl6cVfp1NJENgQ',#3
-        'BQACAgQAAxkBAAEBFZRoIyPO_rPhGaOyzbrB9C1i0kVQFAAC2CMAA1AZUdTTQh9FDanpNgQ',#4
-        'BQACAgQAAxkBAAEBFZ5oIyRnTpQuMZmUL6G0WhoO5B4aTAAC7CMAA1AZUbD3Pqh5iI1gNgQ',#5
-        'BQACAgQAAxkBAAEBFaRoIyUvMwXAz9PJcwM1IppLokbTxwAC_iMAA1AZUa4d5x39FGS6NgQ',#6
-        'BQACAgQAAxkBAAEBFapoIyWcR6Le331xB_Hy3e3yyLuNlwAC_yMAA1AZUSGVkYFzvP5GNgQ',#7
-        'BQACAgQAAxkBAAEBFa5oIyXqcbLkpRD8H0JIea1iQcBN9QACASQAA1AZUQIF8Id9ze3tNgQ',#8
-        'BQACAgQAAxkBAAEBFbBoIyYNu-Oz0H_CmwSiouSiq2WESAACAyQAA1AZUZlu2B38psTBNgQ',#9
-        'BQACAgQAAxkBAAEBFbJoIyY5Y0wmYpBtM6pl9f4HNN6XzwACBSQAA1AZUeb9OVa0RYU1NgQ',#10
-        'BQACAgQAAxkBAAEBFbdoIyaq6xhaL0IQieSe4wakJd5WiQACBiQAA1AZUbUJS4dMKZIKNgQ',#11
-        'BQACAgQAAxkBAAEBFbloIybcbew4-C-ALKSiyYbX0LvZzQACByQAA1AZUcm08Upui6CaNgQ',#12
-        'BQACAgQAAxkBAAEBFcxoIyfdR-Q4uWTvvCYYJRK1vX129AACCCQAA1AZUUUV06vwTECfNgQ',#13
-        'BQACAgQAAxkBAAEBFcxoIyfdR-Q4uWTvvCYYJRK1vX129AACCCQAA1AZUUUV06vwTECfNgQ',#14
-        'BQACAgQAAxkBAAEBFdRoIyhfAWiiAUhdtrryj7NOjFW8pwACCiQAA1AZUfPBIAQINEVLNgQ',#15
-        'BQACAgQAAxkBAAEBFdhoIyiVNqJxHKEkceFyPylG5vH0ugACCyQAA1AZUat5zS5woEANNgQ',#16
+        # ... all your file IDs ...
+        'BQACAgQAAxkBAAEBFdRoIyhfAWiiAUhdtrryj7NOjFW8pwACCiQAA1AZUfPBIAQINEVLNgQ', #15 <-- Comma added
+        'BQACAgQAAxkBAAEBFdhoIyiVNqJxHKEkceFyPylG5vH0ugACCyQAA1AZUat5zS5woEANNgQ', #16
     ],
     'season2': [
-        'FILE_ID_S02E01', # <<<=== REPLACE THIS with the ID for S02E01
-        'FILE_ID_S02E02', # <<<=== REPLACE THIS with the ID for S02E02
-        # Add more file IDs for Season 2 here...
+        'FILE_ID_S02E01',
+        'FILE_ID_S02E02',
     ],
-    # Add more keys (like 'season3', 'movies', etc.) and their file ID lists as needed
 }
+# BOT_TOKEN, BOT_USERNAME, etc. definitions remain the same as your provided script.
+# BOT_TOKEN = os.getenv('BOT_TOKEN', '8085729451:AAEMfsjqZ9TYnYZmbsTROe5WKDBvM-caoRc')
+# BOT_USERNAME = os.getenv('BOT_USERNAME', 'templer1bot')
+# PRIVATE_CHANNEL_ID = os.getenv('PRIVATE_CHANNEL_ID', '-1002668516099')
+# PUBLIC_CHANNEL_ID = os.getenv('PUBLIC_CHANNEL_ID', '@lesleechannel')
+# DELETE_AFTER_SECONDS = 20 * 60
+# AUTO_SETUP_BUTTONS_ON_START = True
 
-# --- Behavior Configuration ---
-# Time in seconds after which sent files should be deleted from the user's chat.
-DELETE_AFTER_SECONDS = 20 * 60  # 20 minutes (1200 seconds). You can change this value.
 
-# Set this to True if you want the bot to automatically post/update
-# the button message in the public channel (@lesleechannel) on startup.
-# Requires bot to be ADMIN in @lesleechannel.
-# !!! IMPORTANT: SET THIS BACK TO False AFTER BUTTONS ARE POSTED !!!
-AUTO_SETUP_BUTTONS_ON_START = True # <<<=== SET TO TRUE TO POST BUTTONS ON NEXT RUN
+# === 3. Core Bot Logic === (All your async functions: start_handler, delete_message_job, etc. - NO CHANGES NEEDED INSIDE THESE FUNCTIONS)
+# ... async def start_handler(...): ...
+# ... async def delete_message_job(...): ...
+# ... async def setup_buttons(...): ...
+# ... async def get_chat_id_handler(...): ...
+# ... async def post_init_hook(...): ...
+# (Just paste all those functions here as they were)
 
-# === 3. Core Bot Logic ===
-
+# COPY ALL YOUR FUNCTION DEFINITIONS HERE:
+# start_handler, delete_message_job, setup_buttons, get_chat_id_handler, post_init_hook
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /start command, primarily processing deep links."""
     user = update.effective_user
@@ -199,7 +157,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except BadRequest as e:
              failed_count += 1
              logger.error(f"BadRequest error sending file {index + 1} (ID: ...{file_id[-10:]}) for '{season_key}' to user {user.id}: {e}. File ID might be invalid or inaccessible.")
-             if "FILE_ID_INVALID" in str(e) and failed_count == 1:
+             if "FILE_ID_INVALID" in str(e).upper() and failed_count == 1:
                  await context.bot.send_message(chat_id, f"⚠️ Couldn't send file {index + 1}. The file ID seems invalid or the file was removed.")
              elif failed_count == 1:
                  await context.bot.send_message(chat_id, f"⚠️ Couldn't send file {index + 1} due to a request error.")
@@ -220,12 +178,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send a summary message if needed
     if failed_count > 0:
          logger.warning(f"Finished sending for '{season_key}' to user {user.id}. Sent: {sent_count}, Failed: {failed_count}.")
-         # Optionally notify user about partial success
-         # await context.bot.send_message(chat_id, f"ℹ️ Finished sending files for '{season_key}'. {sent_count} sent successfully, {failed_count} failed.")
     else:
          logger.info(f"Successfully sent all {sent_count} files for '{season_key}' to user {user.id}.")
-         # Optionally send a completion message:
-         # await context.bot.send_message(chat_id, f"✅ All files for '{season_key}' sent!")
 
 
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
@@ -240,7 +194,7 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
     except Forbidden as e:
         logger.warning(f"Could not auto-delete message {message_id} in chat {chat_id}: Forbidden. Bot might lack permissions or be blocked. {e}")
     except BadRequest as e:
-        if "Message to delete not found" in str(e) or "MESSAGE_ID_INVALID" in str(e):
+        if "Message to delete not found" in str(e) or "MESSAGE_ID_INVALID" in str(e).upper():
             logger.info(f"Message {message_id} in chat {chat_id} already deleted.")
         else:
             logger.warning(f"Could not auto-delete message {message_id} in chat {chat_id}: BadRequest. {e}")
@@ -258,36 +212,39 @@ async def setup_buttons(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
         logger.error("setup_buttons called without a bot instance.")
         return
 
-    if not PUBLIC_CHANNEL_ID or PUBLIC_CHANNEL_ID == '@YourPublicChannelUsername': # Check against default placeholder
+    # Use os.getenv for checks here as well, in case .env wasn't used or variables were not set
+    public_channel_id_val = os.getenv('PUBLIC_CHANNEL_ID', '@YourPublicChannelUsername')
+    bot_username_val = os.getenv('BOT_USERNAME', 'YourBotUsername')
+
+
+    if not public_channel_id_val or public_channel_id_val == '@YourPublicChannelUsername':
         logger.error("PUBLIC_CHANNEL_ID is not configured correctly. Cannot setup buttons.")
         return
-    if not BOT_USERNAME or BOT_USERNAME == 'YourBotUsername': # Check against default placeholder
+    if not bot_username_val or bot_username_val == 'YourBotUsername':
         logger.error("BOT_USERNAME is not configured correctly. Button links will be incorrect.")
         return
 
     keyboard = []
     if not SEASONS:
         logger.warning("SEASONS dictionary is empty. No buttons to create.")
+        # Return if SEASONS is empty
+        return
+
 
     # Filter out seasons with no valid file IDs before creating buttons
     valid_seasons = {key: ids for key, ids in SEASONS.items() if any(fid and not fid.startswith('FILE_ID_') for fid in ids)}
 
     if not valid_seasons:
          logger.warning("No seasons with valid file IDs found. Cannot create buttons.")
-         # Optionally send an update message indicating no content available
-         # try:
-         #    await bot.send_message(chat_id=PUBLIC_CHANNEL_ID, text="No content is currently available.")
-         # except Exception as e:
-         #    logger.error(f"Failed to send 'no content' message: {e}")
          return # Stop if no valid seasons
 
     for key in sorted(valid_seasons.keys()): # Sort keys for consistent button order
         # Create button text (e.g., "Season 1", "Movies")
         button_text = f"🎬 {key.replace('season', 'Season ').replace('_', ' ').title()}"
-        button_url = f"https://t.me/{BOT_USERNAME}?start={key}"
+        button_url = f"https://t.me/{bot_username_val}?start={key}" # Use loaded value
         keyboard.append([InlineKeyboardButton(button_text, url=button_url)])
 
-    if not keyboard:
+    if not keyboard: # Should ideally not happen if valid_seasons is populated
          logger.error("Button generation failed unexpectedly even with valid seasons.")
          return
 
@@ -295,29 +252,27 @@ async def setup_buttons(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
     text = (
          "✨ **Welcome!** ✨\n\n"
          "Select the content you'd like to receive below.\n"
-         "Clicking a button will start a chat with me (@" + BOT_USERNAME + "), and I'll send you the files directly.\n\n"
+         f"Clicking a button will start a chat with me (@{bot_username_val}), and I'll send you the files directly.\n\n"
          f"_(Files are automatically removed after {DELETE_AFTER_SECONDS // 60} minutes.)_"
      )
 
     try:
-        # Consider trying to *edit* an existing message first if you know its ID,
-        # otherwise send a new one. Sending a new one is simpler.
         await bot.send_message(
-            chat_id=PUBLIC_CHANNEL_ID,
+            chat_id=public_channel_id_val, # Use loaded value
             text=text,
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup,
             disable_web_page_preview=True
         )
-        logger.info(f"Successfully sent/updated button message in channel {PUBLIC_CHANNEL_ID}.")
+        logger.info(f"Successfully sent/updated button message in channel {public_channel_id_val}.")
     except Forbidden as e:
-        logger.error(f"Failed to send button message to {PUBLIC_CHANNEL_ID}: Forbidden. Check if bot is ADMIN in the channel. {e}")
+        logger.error(f"Failed to send button message to {public_channel_id_val}: Forbidden. Check if bot is ADMIN in the channel. {e}")
     except BadRequest as e:
-        logger.error(f"Failed to send button message to {PUBLIC_CHANNEL_ID}: BadRequest. Check if PUBLIC_CHANNEL_ID ('{PUBLIC_CHANNEL_ID}') is correct (username or numeric ID). {e}")
+        logger.error(f"Failed to send button message to {public_channel_id_val}: BadRequest. Check if PUBLIC_CHANNEL_ID ('{public_channel_id_val}') is correct. {e}")
     except TelegramError as e:
-        logger.error(f"Telegram error sending button message to {PUBLIC_CHANNEL_ID}: {e}")
+        logger.error(f"Telegram error sending button message to {public_channel_id_val}: {e}")
     except Exception as e:
-        logger.exception(f"Unexpected error sending button message to {PUBLIC_CHANNEL_ID}: {e}")
+        logger.exception(f"Unexpected error sending button message to {public_channel_id_val}: {e}")
 
 
 async def get_chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -330,52 +285,52 @@ async def get_chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.info(f"/chatid command executed by user {user.id} in chat {chat_id} ({chat.type}).")
     else:
          logger.info(f"/chatid command executed in chat {chat_id} ({chat.type}).")
-
-    # Check if the user is the bot admin (optional, but recommended for sensitive commands)
-    # admin_id = 12345678 # Replace with your actual Telegram User ID
-    # if user and user.id == admin_id:
     await update.message.reply_text(response_text, parse_mode=ParseMode.MARKDOWN)
-    # else:
-    #    logger.warning(f"Unauthorized user {user.id} attempted to use /chatid in chat {chat_id}.")
-    #    await update.message.reply_text("Sorry, this command is restricted.")
 
 
 async def post_init_hook(application: Application):
     """Runs tasks after the bot application has been initialized."""
     logger.info("Running post-initialization tasks...")
+
+    # Get effective values that the application is using for bot_username
+    # This bot_username would be from os.getenv at the top of the script
+    current_bot_username_config = BOT_USERNAME
+    current_public_channel_config = PUBLIC_CHANNEL_ID
+
     try:
         bot_info = await application.bot.get_me()
         actual_bot_username = bot_info.username
         logger.info(f"Bot initialized: @{actual_bot_username} (ID: {bot_info.id})")
-        # Verify configured username matches actual bot username
-        if BOT_USERNAME != actual_bot_username:
-             logger.warning(f"CONFIG MISMATCH: Configured BOT_USERNAME ('{BOT_USERNAME}') does not match actual bot username ('{actual_bot_username}')!")
-             # You might want to update BOT_USERNAME dynamically here, but be cautious
-             # BOT_USERNAME = actual_bot_username # Uncomment cautiously
+        if current_bot_username_config and current_bot_username_config != actual_bot_username:
+             logger.warning(f"CONFIG MISMATCH: Configured BOT_USERNAME ('{current_bot_username_config}') does not match actual bot username ('{actual_bot_username}')!")
 
     except Exception as e:
          logger.error(f"Failed to get bot info during post_init: {e}")
 
 
     if AUTO_SETUP_BUTTONS_ON_START:
-        if not PUBLIC_CHANNEL_ID or PUBLIC_CHANNEL_ID == '@YourPublicChannelUsername' or not BOT_USERNAME or BOT_USERNAME == 'YourBotUsername':
-             logger.error("Cannot auto-setup buttons: PUBLIC_CHANNEL_ID or BOT_USERNAME is missing/incorrect in config.")
+        if not current_public_channel_config or current_public_channel_config == '@YourPublicChannelUsername' or \
+           not current_bot_username_config or current_bot_username_config == 'YourBotUsername':
+             logger.error("Cannot auto-setup buttons: PUBLIC_CHANNEL_ID or BOT_USERNAME is missing/incorrect in config (checked in post_init).")
         else:
-             logger.info("Attempting to set up buttons in public channel on startup...")
-             # Schedule the task to run shortly after startup
-             application.job_queue.run_once(lambda ctx: setup_buttons(bot=application.bot), when=2) # Run after 2 seconds
+             logger.info("Attempting to set up buttons in public channel on startup (via post_init_hook)...")
+             application.job_queue.run_once(lambda ctx: setup_buttons(bot=application.bot), when=2)
     else:
         logger.info("Automatic button setup on startup is disabled (AUTO_SETUP_BUTTONS_ON_START=False).")
-        logger.info("Use the /setupbuttons command (if enabled) or run setup_buttons function manually if needed.")
 
 
-# === 4. Main Execution ===
-
-def main() -> None:
+# === 4. Main Bot Execution Function (this used to be main()) ===
+def run_telegram_bot():
     """Sets up the application and runs the bot."""
+    logger.info("Attempting to start Telegram bot application...")
 
     # --- Pre-run Checks ---
-    # Token and Username are checked implicitly by trying to build the application
+    # BOT_TOKEN is critical. If not found by os.getenv (and no fallback), ApplicationBuilder will fail.
+    # Let's add an explicit check here for clarity, though ApplicationBuilder will also raise an error.
+    if not BOT_TOKEN:
+        logger.critical("CRITICAL: BOT_TOKEN is not set. Cannot start bot. Check environment variables.")
+        return
+
     if not SEASONS:
         logger.warning("WARNING: SEASONS dictionary is empty. Bot will run but cannot serve any files until populated.")
     elif all(not fid or fid.startswith('FILE_ID_') for season_files in SEASONS.values() for fid in season_files):
@@ -388,17 +343,17 @@ def main() -> None:
             Application.builder()
             .token(BOT_TOKEN)
             .defaults(defaults)
-            .job_queue(JobQueue())
+            .job_queue(JobQueue()) # This is the line that requires [job-queue] extras
             .post_init(post_init_hook)
             .build()
         )
-    except Exception as e:
-        logger.critical(f"CRITICAL: Failed to build application. Check BOT_TOKEN. Error: {e}")
-        return # Exit if application can't be built
+    except Exception as e: # Catch-all for build failures, including the JobQueue one or missing token
+        logger.critical(f"CRITICAL: Failed to build Telegram application. Check BOT_TOKEN and package installations (esp. for JobQueue). Error: {e}", exc_info=True)
+        return
 
     # --- Log Configuration Summary AFTER basic build ---
     logger.info("--- Bot Configuration Summary ---")
-    logger.info(f"Bot Username (Configured): @{BOT_USERNAME}") # Actual username logged in post_init
+    logger.info(f"Bot Username (Configured): @{BOT_USERNAME}")
     logger.info(f"Public Channel: {PUBLIC_CHANNEL_ID}")
     logger.info(f"Private Channel ID (Reference): {PRIVATE_CHANNEL_ID}")
     logger.info(f"Defined Season Keys: {list(SEASONS.keys())}")
@@ -406,46 +361,41 @@ def main() -> None:
     logger.info(f"Auto-setup buttons on start: {AUTO_SETUP_BUTTONS_ON_START}")
     logger.info("--------------------------------")
 
-
     # --- Register Handlers ---
     application.add_handler(CommandHandler("start", start_handler))
-
-    # Optional: Command to manually trigger button setup (e.g., run by admin)
-    # Needs careful permission checking if you enable it widely.
-    # async def restricted_setup_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    #     user_id = update.effective_user.id
-    #     ADMIN_USER_ID = 12345678 # Replace with YOUR Telegram User ID
-    #     if user_id == ADMIN_USER_ID:
-    #         logger.info(f"Admin user {user_id} triggered /setupbuttons")
-    #         await setup_buttons(context=context)
-    #     else:
-    #         logger.warning(f"Unauthorized user {user_id} tried to run /setupbuttons")
-    #         await update.message.reply_text("You are not authorized to use this command.")
-    # application.add_handler(CommandHandler("setupbuttons", restricted_setup_buttons))
-
-    # Command to get chat ID (useful for finding PRIVATE_CHANNEL_ID)
-    application.add_handler(CommandHandler("chatid", get_chat_id_handler)) # Keep restricted version if needed
-
+    application.add_handler(CommandHandler("chatid", get_chat_id_handler))
 
     # --- Start Bot ---
-    logger.info("Starting bot polling...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES) # Process all update types
+    logger.info("Starting Telegram bot polling...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES) # This is a blocking call
 
-    logger.info("Bot polling stopped.")
+    logger.info("Telegram bot polling stopped.")
 
 
+# === 5. Main Entry Point (if __name__ == '__main__') ===
 if __name__ == '__main__':
-    main()
+    logger.info("Script starting...")
 
+    # Start the keep_alive Flask server (from keep_alive.py)
+    # This assumes keep_alive() starts the Flask server in a separate, non-blocking thread.
+    try:
+        keep_alive()
+        logger.info("Keep_alive server thread initiated.")
+    except Exception as e_ka:
+        logger.error(f"Error starting keep_alive server: {e_ka}", exc_info=True)
+        # Depending on how critical keep_alive is, you might want to exit here
+        # For now, we'll log the error and try to run the bot anyway.
 
-# === 5. Final Setup Checklist ===
-# -------------------------------------------------------------------------------
-# ✔️  **Configuration Set**: Your Token, Username, Channel IDs are pre-filled above.
-# ✔️  **Populate `SEASONS`**: **YOU MUST DO THIS!** Replace the remaining `'FILE_ID_...'` placeholders in the `SEASONS` dictionary with your actual file IDs obtained using `@RawDataBot` or `@JsonDumpBot`.
-# ✔️  **Admin Permissions**: Ensure your bot (@templer1bot) is an ADMIN in:
-#      - The **Private Channel** (`-1002668516099`) (to access files).
-#      - The **Public Channel** (`@lesleechannel`) (to post messages).
-# ✔️  **`AUTO_SETUP_BUTTONS_ON_START`**: Currently `True`. Run the bot once to post buttons. Then STOP the bot, change this back to `False`, SAVE, and restart the bot for normal operation.
-# ✔️  **Install Library**: Open terminal/PyCharm terminal: `pip install "python-telegram-bot[job-queue]"` (You already did this).
-# ✔️  **Run**: Save this code as a `.py` file (e.g., `templer_bot.py`) and run from terminal/PyCharm: `python templer_bot.py`
-# -------------------------------------------------------------------------------
+    # Run the main Telegram bot logic
+    try:
+        run_telegram_bot()
+    except KeyboardInterrupt:
+        logger.info("Bot process interrupted by user (KeyboardInterrupt).")
+    except Exception as e_main_bot:
+        # This catches any unexpected error during the bot's main run that wasn't caught by run_telegram_bot() itself
+        logger.critical(f"An unhandled error occurred in the main bot execution block: {e_main_bot}", exc_info=True)
+    finally:
+        logger.info("Script execution finished or bot has stopped.")
+
+# === 6. Final Setup Checklist === (Your existing checklist - no changes needed here)
+# ...
