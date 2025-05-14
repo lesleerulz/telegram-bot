@@ -1,0 +1,134 @@
+name: AI Code Review with Gemini
+
+on:
+  pull_request: # Triggers when a pull request is opened, reopened, or synchronized (new commits pushed)
+    types: [opened, reopened, synchronize]
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest # Use the latest Ubuntu runner
+
+    permissions: # NEW: Grant permissions to write to pull requests
+      contents: read      # To read repository content (like the diff)
+      pull-requests: write # To post comments on the PR
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetches all history so we can get a proper diff with base
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # Or your preferred Python version
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-generativeai # Gemini client library
+          pip install PyGithub          # To interact with GitHub API easily
+
+      - name: Get PR Diff
+        id: get_diff
+        run: |
+          # Get the base and head SHA for the PR
+          BASE_SHA=$(git rev-parse origin/${{ github.base_ref }}) # Base of the PR (e.g., main)
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}   # Latest commit in the PR
+          
+          echo "Base SHA: $BASE_SHA"
+          echo "Head SHA: $HEAD_SHA"
+          
+          # Generate the diff and escape it for JSON, then set as output
+          DIFF_CONTENT=$(git diff $BASE_SHA $HEAD_SHA)
+          # Basic escaping for JSON - more robust escaping might be needed for complex diffs
+          DIFF_CONTENT_ESCAPED=$(echo "$DIFF_CONTENT" | awk '{gsub(/["\\]/, "\\\\&"); printf "%s\\n", $0}' | awk '{printf "%s\\n", $0}' ORS='')
+          echo "diff_content<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF_CONTENT_ESCAPED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "Diff generated (first 10 lines):"
+          echo "$DIFF_CONTENT" | head -n 10
+
+
+      - name: AI Code Review
+        id: ai_review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Automatically available
+          DIFF_CONTENT: ${{ steps.get_diff.outputs.diff_content }}
+        run: |
+          # Python script to call Gemini API and post comment
+          # Create a new file review_pr.py (or put inline if very short)
+          cat << 'EOF_PY' > review_pr.py
+          import os
+          import google.generativeai as genai
+          from github import Github
+          import sys
+
+          print("Starting AI review script...")
+
+          try:
+              gemini_api_key = os.environ['GEMINI_API_KEY']
+              pr_number = int(os.environ['PR_NUMBER'])
+              gh_token = os.environ['GH_TOKEN']
+              diff_content = os.environ['DIFF_CONTENT']
+              repo_name = os.environ['GITHUB_REPOSITORY'] # e.g., "owner/repo"
+              
+              print(f"PR Number: {pr_number}")
+              print(f"Repo Name: {repo_name}")
+              # print(f"Diff Content (first 100 chars): {diff_content[:100]}") # For debugging
+
+              if not diff_content or diff_content.isspace():
+                  print("Diff content is empty. No review needed.")
+                  sys.exit(0)
+
+              genai.configure(api_key=gemini_api_key)
+              model = genai.GenerativeModel('gemini-1.5-flash-latest') # Or 'gemini-1.0-pro'
+
+              prompt = f"""
+              You are an expert Python code reviewer. Review the following code diff from a Pull Request for a Telegram bot.
+              Provide concise feedback on potential bugs, style issues, improvements, or security considerations.
+              If there are no significant issues, say so. Structure your review clearly.
+              Avoid overly verbose explanations unless a concept is complex.
+
+              Diff:
+              ```diff
+              {diff_content}
+              ```
+              """
+              
+              print("Sending prompt to Gemini...")
+              response = model.generate_content(prompt)
+              review_text = response.text
+              
+              print("Gemini Review Received:")
+              print(review_text)
+
+              # Post review as a comment on the PR
+              g = Github(gh_token)
+              repo = g.get_repo(repo_name)
+              pull_request = repo.get_pull(pr_number)
+              
+              comment_body = f"🤖 **Gemini AI Code Review:**\n\n{review_text}"
+              pull_request.create_issue_comment(comment_body)
+              print(f"Successfully posted comment to PR #{pr_number}")
+
+          except KeyError as e:
+              print(f"Error: Missing environment variable: {e}")
+              sys.exit(1)
+          except Exception as e:
+              print(f"An error occurred: {e}")
+              # Optionally, still try to post the error as a comment to the PR for visibility
+              try:
+                  g = Github(os.environ['GH_TOKEN'])
+                  repo = g.get_repo(os.environ['GITHUB_REPOSITORY'])
+                  pull_request = repo.get_pull(int(os.environ['PR_NUMBER']))
+                  pull_request.create_issue_comment(f"🤖 AI Code Review Failed: {str(e)[:500]}...") # Truncate long errors
+              except Exception as e_comment:
+                  print(f"Failed to post error comment to PR: {e_comment}")
+              sys.exit(1)
+          EOF_PY
+          
+          python review_pr.py
