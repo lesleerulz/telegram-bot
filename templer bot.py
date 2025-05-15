@@ -1,6 +1,6 @@
 # ===----------------------------------------------------------------------=== #
 #          Simplified Telegram File Share Bot (No Membership Check)            #
-#                        (With Keep-Alive)                                   #
+#                        (With Keep-Alive & MDv2 Fix)                         #
 # ===----------------------------------------------------------------------=== #
 
 # 1. Environment Variable Loading (MUST be at the very top)
@@ -29,7 +29,7 @@ from telegram.ext import (
     JobQueue,
     Defaults,
 )
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode # No ChatMemberStatus needed for this version
 from telegram.error import TelegramError, Forbidden, BadRequest
 from telegram.helpers import escape_markdown # For MarkdownV2 escaping
 
@@ -64,31 +64,24 @@ if not BOT_USERNAME: logger.warning("WARNING: BOT_USERNAME is not set. Deep link
 
 # --- File & Series/Season Configuration ---
 SEASONS = {
-    'apothecary_diaries_s1': [ # Using underscores for keys is better for URLs
-        'BQACAgQAAxkBAAEBEWhoImGp0GLWjLBTaJ90ZcIYtdFtvQACtSMAA1AZUQABXCxSF360SzYE',
-        'BQACAgQAAxkBAAEBEX9oInhdz1T_S7sJEifWD91VL5vO7QACzyMAA1AZUZ107KoTZlUXNgQ',
-        'BQACAgQAAxkBAAEBFY5oIyNYobHZHWWk2DJ2Hjkx99LgRAAC1CMAA1AZUdl6cVfp1NJENgQ',
-        'BQACAgQAAxkBAAEBFZRoIyPO_rPhGaOyzbrB9C1i0kVQFAAC2CMAA1AZUdTTQh9FDanpNgQ',
-        'BQACAgQAAxkBAAEBFZ5oIyRnTpQuMZmUL6G0WhoO5B4aTAAC7CMAA1AZUbD3Pqh5iI1gNgQ',
-        'BQACAgQAAxkBAAEBFaRoIyUvMwXAz9PJcwM1IppLokbTxwAC_iMAA1AZUa4d5x39FGS6NgQ',
-        'BQACAgQAAxkBAAEBFapoIyWcR6Le331xB_Hy3e3yyLuNlwAC_yMAA1AZUSGVkYFzvP5GNgQ',
-        'BQACAgQAAxkBAAEBFa5oIyXqcbLkpRD8H0JIea1iQcBN9QACASQAA1AZUQIF8Id9ze3tNgQ',
-        'BQACAgQAAxkBAAEBFbBoIyYNu-Oz0H_CmwSiouSiq2WESAACAyQAA1AZUZlu2B38psTBNgQ',
-        'BQACAgQAAxkBAAEBFbJoIyY5Y0wmYpBtM6pl9f4HNN6XzwACBSQAA1AZUeb9OVa0RYU1NgQ',
-        'BQACAgQAAxkBAAEBFbdoIyaq6xhaL0IQieSe4wakJd5WiQACBiQAA1AZUbUJS4dMKZIKNgQ',
-        'BQACAgQAAxkBAAEBFbloIybcbew4-C-ALKSiyYbX0LvZzQACByQAA1AZUcm08Upui6CaNgQ',
-        'BQACAgQAAxkBAAEBFcxoIyfdR-Q4uWTvvCYYJRK1vX129AACCCQAA1AZUUUV06vwTECfNgQ',
-        'BQACAgQAAxkBAAEBFcxoIyfdR-Q4uWTvvCYYJRK1vX129AACCCQAA1AZUUUV06vwTECfNgQ',
-        'BQACAgQAAxkBAAEBFdRoIyhfAWiiAUhdtrryj7NOjFW8pwACCiQAA1AZUfPBIAQINEVLNgQ',
+    'apothecary_diaries_s1': [
+        'BQACAgQAAxkBAAEBEWhoImGp0GLWjLBTaJ90ZcIYtdFtvQACtSMAA1AZUQABXCxSF360SzYE', 'BQACAgQAAxkBAAEBEX9oInhdz1T_S7sJEifWD91VL5vO7QACzyMAA1AZUZ107KoTZlUXNgQ',
+        'BQACAgQAAxkBAAEBFY5oIyNYobHZHWWk2DJ2Hjkx99LgRAAC1CMAA1AZUdl6cVfp1NJENgQ', 'BQACAgQAAxkBAAEBFZRoIyPO_rPhGaOyzbrB9C1i0kVQFAAC2CMAA1AZUdTTQh9FDanpNgQ',
+        'BQACAgQAAxkBAAEBFZ5oIyRnTpQuMZmUL6G0WhoO5B4aTAAC7CMAA1AZUbD3Pqh5iI1gNgQ', 'BQACAgQAAxkBAAEBFaRoIyUvMwXAz9PJcwM1IppLokbTxwAC_iMAA1AZUa4d5x39FGS6NgQ',
+        'BQACAgQAAxkBAAEBFapoIyWcR6Le331xB_Hy3e3yyLuNlwAC_yMAA1AZUSGVkYFzvP5GNgQ', 'BQACAgQAAxkBAAEBFa5oIyXqcbLkpRD8H0JIea1iQcBN9QACASQAA1AZUQIF8Id9ze3tNgQ',
+        'BQACAgQAAxkBAAEBFbBoIyYNu-Oz0H_CmwSiouSiq2WESAACAyQAA1AZUZlu2B38psTBNgQ', 'BQACAgQAAxkBAAEBFbJoIyY5Y0wmYpBtM6pl9f4HNN6XzwACBSQAA1AZUeb9OVa0RYU1NgQ',
+        'BQACAgQAAxkBAAEBFbdoIyaq6xhaL0IQieSe4wakJd5WiQACBiQAA1AZUbUJS4dMKZIKNgQ', 'BQACAgQAAxkBAAEBFbloIybcbew4-C-ALKSiyYbX0LvZzQACByQAA1AZUcm08Upui6CaNgQ',
+        'BQACAgQAAxkBAAEBFcxoIyfdR-Q4uWTvvCYYJRK1vX129AACCCQAA1AZUUUV06vwTECfNgQ', 'BQACAgQAAxkBAAEBFcxoIyfdR-Q4uWTvvCYYJRK1vX129AACCCQAA1AZUUUV06vwTECfNgQ',
+        'BQACAgQAAxkBAAEBFdRoIyhfAWiiAUhdtrryj7NOjFW8pwACCiQAA1AZUfPBIAQINEVLNgQ', 
         'BQACAgQAAxkBAAEBFdhoIyiVNqJxHKEkceFyPylG5vH0ugACCyQAA1AZUat5zS5woEANNgQ',
     ],
-    'another_series_s2': [ # Example, populate with real IDs
+    'another_series_s2': [ 
         'FILE_ID_S02E01',
         'FILE_ID_S02E02',
     ],
 }
 
-SEASONS_DISPLAY_NAMES = { # For prettier button text
+SEASONS_DISPLAY_NAMES = { 
     'apothecary_diaries_s1': "Apothecary Diaries (S1 Dual 1080p)",
     'another_series_s2': "Another Series (Season 2)",
 }
@@ -99,12 +92,11 @@ AUTO_SETUP_BUTTONS_ON_START = True
 # === Core Bot Logic ===
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the /start command, primarily processing deep links."""
     user = update.effective_user
     chat_id = update.effective_chat.id
     args = context.args
 
-    if not PUBLIC_CHANNEL_ID: # This check can remain for the welcome message
+    if not PUBLIC_CHANNEL_ID:
         logger.error("start_handler: PUBLIC_CHANNEL_ID is not configured.")
         if update.message: await update.message.reply_text("Bot configuration error. Please contact admin.", parse_mode=None)
         return
@@ -112,11 +104,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"/start command: user={user.id}({user.full_name or 'UnknownUser'}), chat={chat_id}, args={args}")
 
     if not args:
-        pc_id_display = str(PUBLIC_CHANNEL_ID)
+        pc_id_display_escaped = escape_markdown(str(PUBLIC_CHANNEL_ID), version=2)
         if isinstance(PUBLIC_CHANNEL_ID, str) and PUBLIC_CHANNEL_ID.startswith('@'):
-             pc_id_display = escape_markdown(PUBLIC_CHANNEL_ID, version=2)
+             pc_id_display_escaped = escape_markdown(PUBLIC_CHANNEL_ID, version=2) # Usernames are usually safe but doesn't hurt
+        
         await update.message.reply_text(
-            f"Hello\\! 👋 Please use the buttons in our public channel ({pc_id_display}) to request files\\.",
+            f"Hello\\! 👋 Please use the buttons in our public channel ({pc_id_display_escaped}) to request files\\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
         logger.info(f"Sent welcome message to user {user.id} (no deep link args).")
@@ -132,97 +125,97 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_ids = SEASONS.get(content_key, [])
     valid_file_ids = [fid for fid in file_ids if fid and not fid.startswith('FILE_ID_')]
     display_content_name = SEASONS_DISPLAY_NAMES.get(content_key, content_key.replace('_', ' ').title())
+    escaped_display_name = escape_markdown(display_content_name, version=2) # Escape for use in MarkdownV2
 
     if not valid_file_ids:
-        await update.message.reply_text(
-            f"🚧 Files for '{escape_markdown(display_content_name, version=2)}' seem to be missing or not configured correctly yet\\. "
-            "Please check back later or contact an admin\\.",
-            parse_mode=ParseMode.MARKDOWN_V2
+        msg_text = (
+            f"🚧 Files for '{escaped_display_name}' seem to be missing or not configured correctly yet\\. "
+            "Please check back later or contact an admin\\."
         )
+        await update.message.reply_text(msg_text, parse_mode=ParseMode.MARKDOWN_V2)
         logger.warning(f"No valid file IDs found for key '{content_key}' requested by user {user.id}.")
         return
 
-    await update.message.reply_text(
-        f"✅ Got it\\! Sending you {len(valid_file_ids)} file\\(s\\) for '{escape_markdown(display_content_name, version=2)}'\\.\n\n"
-        f"🕒 _These files will be automatically deleted in {DELETE_AFTER_SECONDS // 60} minutes\\._",
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
+    # *** MODIFIED MESSAGE SENDING FOR CLARITY AND CORRECT ESCAPING ***
+    line1 = f"✅ Got it\\! Sending you {len(valid_file_ids)} file\\(s\\) for '{escaped_display_name}'\\."
+    line2 = f"🕒 _These files will be automatically deleted in {DELETE_AFTER_SECONDS // 60} minutes\\._"
+    full_message = f"{line1}\n\n{line2}"
+
+    try:
+        await update.message.reply_text(
+            full_message,
+            parse_mode=ParseMode.MARKDOWN_V2 # Application default is already this, but being explicit
+        )
+    except BadRequest as e_msg:
+        logger.error(f"BadRequest sending info message for '{content_key}': {e_msg}")
+        logger.error(f"Problematic message text that caused error: {full_message}") # Log the exact text
+        # Fallback to plain text if MarkdownV2 fails
+        plain_message = (
+            f"Got it! Sending you {len(valid_file_ids)} file(s) for '{display_content_name}'.\n\n"
+            f"These files will be automatically deleted in {DELETE_AFTER_SECONDS // 60} minutes."
+        )
+        await update.message.reply_text(plain_message, parse_mode=None)
+    
     logger.info(f"Processing request for '{content_key}' ({len(valid_file_ids)} files) for user {user.id}.")
 
     sent_count = 0
     failed_count = 0
     for index, file_id in enumerate(valid_file_ids):
         try:
-            caption = f"{display_content_name} - Part {index + 1}" # Captions are plain text by default
+            caption = f"{display_content_name} - Part {index + 1}"
             sent_message = await context.bot.send_document(
-                chat_id=chat_id,
-                document=file_id,
-                caption=caption,
+                chat_id=chat_id, document=file_id, caption=caption,
+                # If captions ever need Markdown, add: parse_mode=ParseMode.MARKDOWN_V2
             )
             sent_count += 1
-            logger.info(f"Successfully sent file {index + 1}/{len(valid_file_ids)} (ID: ...{file_id[-10:]}) for '{content_key}' to user {user.id}.")
-
+            logger.info(f"Successfully sent Part {index + 1} for '{content_key}' to {user.id} (MsgID: {sent_message.message_id}).")
             context.job_queue.run_once(
-                delete_message_job,
-                when=DELETE_AFTER_SECONDS,
+                delete_message_job, DELETE_AFTER_SECONDS,
                 data={'chat_id': chat_id, 'message_id': sent_message.message_id},
                 name=f'del_{chat_id}_{sent_message.message_id}'
             )
-            logger.info(f"Scheduled message {sent_message.message_id} for deletion in {DELETE_AFTER_SECONDS}s.")
-            await asyncio.sleep(0.5) # Polite delay
-
+            await asyncio.sleep(0.5)
         except Forbidden as e:
-            failed_count += 1
-            logger.error(f"Forbidden error sending file Part {index+1} ('{content_key}') for {user.id}: {e}.")
-            if failed_count == 1: await context.bot.send_message(chat_id, "⚠️ I couldn't send one or more files. I might be blocked or lack permissions.", parse_mode=None)
+            failed_count += 1; logger.error(f"Forbidden: Part {index+1} ('{content_key}') for {user.id}: {e}.")
+            if failed_count == 1: await context.bot.send_message(chat_id, "⚠️ Couldn't send files. I might be blocked or lack permissions.", parse_mode=None)
         except BadRequest as e:
-             failed_count += 1
-             logger.error(f"BadRequest error sending file Part {index+1} ('{content_key}') for {user.id}: {e}.")
-             if "FILE_ID_INVALID" in str(e).upper() and failed_count == 1:
-                 await context.bot.send_message(chat_id, f"⚠️ Couldn't send file {index + 1}. The file ID seems invalid or the file was removed.", parse_mode=None)
-             elif failed_count == 1:
-                 await context.bot.send_message(chat_id, f"⚠️ Couldn't send file {index + 1} due to a request error.", parse_mode=None)
+            failed_count += 1; logger.error(f"BadRequest: Part {index+1} ('{content_key}') for {user.id}: {e}.")
+            if "FILE_ID_INVALID" in str(e).upper() and failed_count == 1:
+                await context.bot.send_message(chat_id, f"⚠️ Couldn't send file {index+1} (invalid ID or removed).", parse_mode=None)
+            elif failed_count == 1:
+                await context.bot.send_message(chat_id, f"⚠️ Couldn't send file {index+1} (request error).", parse_mode=None)
         except TelegramError as e:
-            failed_count += 1
-            logger.error(f"Telegram error sending file Part {index+1} ('{content_key}') for {user.id}: {e}")
-            if failed_count == 1: await context.bot.send_message(chat_id, f"⚠️ An error occurred while sending file {index + 1}. Please try again later.", parse_mode=None)
+            failed_count += 1; logger.error(f"TelegramError: Part {index+1} ('{content_key}') for {user.id}: {e}")
+            if failed_count == 1: await context.bot.send_message(chat_id, f"⚠️ Error sending file {index+1}. Try again.", parse_mode=None)
         except Exception as e:
-            failed_count += 1
-            logger.exception(f"Unexpected error sending file Part {index+1} ('{content_key}') for {user.id}: {e}")
-            if failed_count == 1: await context.bot.send_message(chat_id, f"⚠️ An unexpected error occurred sending file {index + 1}.", parse_mode=None)
+            failed_count += 1; logger.exception(f"Unexpected error sending Part {index+1} ('{content_key}') for {user.id}: {e}")
+            if failed_count == 1: await context.bot.send_message(chat_id, f"⚠️ Unexpected error sending file {index+1}.", parse_mode=None)
 
-    if failed_count > 0:
-         logger.warning(f"Finished sending for '{content_key}' to user {user.id}. Sent: {sent_count}, Failed: {failed_count}.")
-    else:
-         logger.info(f"Successfully sent all {sent_count} files for '{content_key}' to user {user.id}.")
+    if failed_count > 0: logger.warning(f"Finished '{content_key}' for {user.id}. Sent: {sent_count}, Failed: {failed_count}.")
+    else: logger.info(f"All {sent_count} files for '{content_key}' sent to {user.id}.")
 
 
 async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
     job = context.job; chat_id = job.data['chat_id']; message_id = job.data['message_id']
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-        logger.info(f"Successfully auto-deleted message {message_id} from chat {chat_id}.")
-    except Forbidden: logger.warning(f"No permission to auto-delete message {message_id} in chat {chat_id}.")
+        logger.info(f"Auto-deleted msg {message_id} from chat {chat_id}.")
+    except Forbidden: logger.warning(f"No permission to auto-delete {message_id} in {chat_id}.")
     except BadRequest as e:
-        if "message to delete not found" in str(e).lower() or "message_id_invalid" in str(e).lower():
-            logger.info(f"Message {message_id} in chat {chat_id} already deleted or invalid.")
-        else: logger.warning(f"BadRequest when deleting message {message_id} in chat {chat_id}: {e}")
-    except Exception as e:
-        logger.error(f"Unexpected error during auto-deletion of message {message_id} in chat {chat_id}: {e}", exc_info=True)
+        if "not found" in str(e).lower() or "invalid" in str(e).lower(): logger.info(f"Msg {message_id} in {chat_id} already deleted/invalid.")
+        else: logger.warning(f"BadRequest deleting {message_id} in {chat_id}: {e}")
+    except Exception as e: logger.error(f"Err auto-deleting {message_id} in {chat_id}: {e}", exc_info=True)
 
 
 async def setup_buttons(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = None):
     if not bot and context: bot = context.bot
-    if not bot: logger.error("setup_buttons: Bot instance missing."); return
-    if not PUBLIC_CHANNEL_ID or not BOT_USERNAME:
-        logger.error("setup_buttons: Crucial configuration (PUBLIC_CHANNEL_ID or BOT_USERNAME) missing.")
-        return
+    if not bot: logger.error("setup_buttons: Bot missing."); return
+    if not PUBLIC_CHANNEL_ID or not BOT_USERNAME: logger.error("setup_buttons: Config missing."); return
 
     keyboard = []
-    if not SEASONS: logger.warning("setup_buttons: SEASONS dictionary is empty."); return
-    
+    if not SEASONS: logger.warning("setup_buttons: SEASONS empty."); return
     valid_keys = sorted([k for k, v_list in SEASONS.items() if any(fid and not fid.startswith('FILE_ID_') for fid in v_list)])
-    if not valid_keys: logger.warning("setup_buttons: No valid content keys found with actual file IDs."); return
+    if not valid_keys: logger.warning("setup_buttons: No valid content keys."); return
 
     for key in valid_keys:
         display_name = SEASONS_DISPLAY_NAMES.get(key, key.replace('_', ' ').title())
@@ -230,17 +223,17 @@ async def setup_buttons(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
         button_url = f"https://t.me/{BOT_USERNAME}?start={key}"
         keyboard.append([InlineKeyboardButton(button_text, url=button_url)])
 
-    if not keyboard: logger.error("setup_buttons: Keyboard generation failed unexpectedly."); return
+    if not keyboard: logger.error("setup_buttons: Keyboard gen failed."); return
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     safe_bot_username = escape_markdown(BOT_USERNAME, version=2) if BOT_USERNAME else "the bot"
+    minutes_display = DELETE_AFTER_SECONDS // 60
     
     text_lines = [
-        "✨ *Welcome to the File Portal\\!* ✨", # Use asterisk for bold in MDv2
+        "✨ *File Portal Updated\\!* ✨", # Bold
         "",
         "Select the content you'd like to receive below\\.",
-        # Removed the explicit membership requirement line for this simpler version
-        f"Files are sent via @{safe_bot_username} and auto\\-delete after {DELETE_AFTER_SECONDS // 60} minutes\\."
+        f"Files are sent via @{safe_bot_username} and auto\\-delete after {minutes_display} minutes\\."
     ]
     text = "\n".join(text_lines)
 
@@ -249,7 +242,7 @@ async def setup_buttons(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
             chat_id=PUBLIC_CHANNEL_ID, text=text, reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2, disable_web_page_preview=True
         )
-        logger.info(f"Button message sent/updated in channel {PUBLIC_CHANNEL_ID}.")
+        logger.info(f"Button message sent/updated in {PUBLIC_CHANNEL_ID}.")
     except Exception as e:
         logger.error(f"Failed to send button message to {PUBLIC_CHANNEL_ID}: {e}", exc_info=True)
         if "parse" in str(e).lower(): logger.error(f"Problematic MarkdownV2 text for buttons was: {text}")
@@ -257,10 +250,9 @@ async def setup_buttons(context: ContextTypes.DEFAULT_TYPE = None, bot: Bot = No
 
 async def get_chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat; user = update.effective_user
-    chat_id_val = chat.id if chat else "N/A" # Use a different name for chat_id to avoid conflict if chat is None
+    chat_id_val = chat.id if chat else "N/A"
     chat_type_val = chat.type if chat else "N/A"
     user_id_val = user.id if user else "N/A"
-
     response_text = f"Chat ID: {chat_id_val}\nChat Type: {chat_type_val}"
     if user: response_text += f"\nYour User ID: {user_id_val}"
     logger.info(f"/chatid by user {user_id_val} in chat {chat_id_val} (type: {chat_type_val}).")
@@ -269,39 +261,32 @@ async def get_chat_id_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def post_init_hook(application: Application):
     logger.info("Running post-initialization tasks...")
-    if not all([BOT_TOKEN, BOT_USERNAME, PUBLIC_CHANNEL_ID]): # Check for None or empty strings
-        logger.warning("post_init: Some critical configurations (BOT_TOKEN, BOT_USERNAME, PUBLIC_CHANNEL_ID) are missing or empty. Bot functionality might be impaired.")
-
+    if not all([BOT_TOKEN, BOT_USERNAME, PUBLIC_CHANNEL_ID]):
+        logger.warning("post_init: Critical configs missing. Functionality impaired.")
     try:
         bot_info = await application.bot.get_me()
-        actual_bot_username = bot_info.username
-        logger.info(f"Bot successfully initialized with Telegram: @{actual_bot_username} (ID: {bot_info.id})")
-        if BOT_USERNAME and BOT_USERNAME != actual_bot_username: # Check if BOT_USERNAME is not None/empty
-             logger.warning(f"CONFIG MISMATCH: Env BOT_USERNAME ('{BOT_USERNAME}') vs actual bot username ('{actual_bot_username}')!")
-    except Exception as e:
-         logger.error(f"Failed to get bot info during post_init: {e}", exc_info=True)
+        logger.info(f"Bot init: @{bot_info.username} (ID: {bot_info.id})")
+        if BOT_USERNAME and BOT_USERNAME != bot_info.username:
+             logger.warning(f"MISMATCH: Env BOT_USERNAME ('{BOT_USERNAME}') vs actual ('{bot_info.username}')!")
+    except Exception as e: logger.error(f"Failed bot info in post_init: {e}", exc_info=True)
 
     if AUTO_SETUP_BUTTONS_ON_START:
-        if PUBLIC_CHANNEL_ID and BOT_USERNAME: # Ensure these are not None/empty
-             logger.info("post_init: Scheduling button setup for public channel...")
+        if PUBLIC_CHANNEL_ID and BOT_USERNAME:
+             logger.info("post_init: Scheduling button setup...")
              application.job_queue.run_once(lambda ctx: setup_buttons(bot=application.bot), when=2)
-        else:
-            logger.error("post_init: Cannot auto-setup buttons; PUBLIC_CHANNEL_ID or BOT_USERNAME is not set/empty in environment.")
-    else:
-        logger.info("post_init: Automatic button setup on startup is disabled (AUTO_SETUP_BUTTONS_ON_START=False).")
+        else: logger.error("post_init: Cannot auto-setup; config missing for PUBLIC_CHANNEL_ID or BOT_USERNAME.")
+    else: logger.info("post_init: Auto button setup disabled.")
 
 # === Main Bot Execution Function ===
 def run_telegram_bot_application():
     logger.info("Attempting to start Telegram bot application...")
-    if not BOT_TOKEN: # Critical check for the token
-        logger.critical("CRITICAL ERROR: BOT_TOKEN is not set in environment. Telegram bot cannot start.")
-        return
+    if not BOT_TOKEN: logger.critical("CRITICAL: BOT_TOKEN missing."); return
 
-    if not SEASONS: logger.warning("WARNING: SEASONS dictionary is empty.")
+    if not SEASONS: logger.warning("SEASONS empty.")
     elif all(not fid or fid.startswith('FILE_ID_') for sf_list in SEASONS.values() for fid in sf_list if isinstance(sf_list, list)):
-         logger.warning("WARNING: SEASONS dictionary only contains placeholders or empty lists of files.")
+         logger.warning("SEASONS only placeholders/empty lists.")
 
-    defaults = Defaults(parse_mode=ParseMode.MARKDOWN_V2) # Set default parse mode
+    defaults = Defaults(parse_mode=ParseMode.MARKDOWN_V2) # Default parse mode for bot
     
     try:
         application = (
@@ -313,21 +298,21 @@ def run_telegram_bot_application():
             .build()
         )
     except Exception as e:
-        logger.critical(f"CRITICAL: Failed to build Telegram application. Error: {e}", exc_info=True)
+        logger.critical(f"CRITICAL: Failed Telegram app build: {e}", exc_info=True)
         return
 
     logger.info("--- Bot Configuration Summary ---")
-    logger.info(f"Bot Username (from env): @{BOT_USERNAME or 'NOT SET'}")
-    logger.info(f"Public Channel (from env): {PUBLIC_CHANNEL_ID or 'NOT SET'}")
-    logger.info(f"Private Channel ID (from env, ref): {PRIVATE_CHANNEL_ID or 'NOT SET'}")
-    logger.info(f"Defined Content Keys: {list(SEASONS.keys())}")
-    logger.info(f"Auto-delete files after: {DELETE_AFTER_SECONDS} seconds")
-    logger.info(f"Auto-setup buttons on start: {AUTO_SETUP_BUTTONS_ON_START}")
+    logger.info(f"Bot Username: @{BOT_USERNAME or 'N/A'}")
+    logger.info(f"Public Channel: {PUBLIC_CHANNEL_ID or 'N/A'}")
+    logger.info(f"Private Channel (Ref): {PRIVATE_CHANNEL_ID or 'N/A'}")
+    logger.info(f"Content Keys: {list(SEASONS.keys())}")
+    logger.info(f"Delete After: {DELETE_AFTER_SECONDS}s")
+    logger.info(f"Auto Setup Buttons: {AUTO_SETUP_BUTTONS_ON_START}")
     logger.info("--------------------------------")
 
     application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(CommandHandler("chatid", get_chat_id_handler))
-    # No CallbackQueryHandler for retry_handler in this version
+    # No CallbackQueryHandler in this simpler version
 
     logger.info("Starting Telegram bot polling...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
@@ -336,24 +321,18 @@ def run_telegram_bot_application():
 # === Main Entry Point ===
 if __name__ == '__main__':
     logger.info("Script execution starting...")
-
     if not all([BOT_TOKEN, BOT_USERNAME, PUBLIC_CHANNEL_ID]):
-        logger.critical("CRITICAL ERROR: BOT_TOKEN, BOT_USERNAME, or PUBLIC_CHANNEL_ID is missing from environment. Bot may not run reliably. Please check configuration (e.g., .env file or platform environment variables).")
-        # import sys; sys.exit(1) # Optional: Force exit if criticals are missing
+        logger.critical("CRITICAL: Essential env vars (BOT_TOKEN, BOT_USERNAME, PUBLIC_CHANNEL_ID) not all set. Exiting.")
+        # import sys; sys.exit(1) # Consider hard exit
     else:
-        logger.info("Essential configurations (BOT_TOKEN, BOT_USERNAME, PUBLIC_CHANNEL_ID) appear to be loaded.")
-        
+        logger.info("Essential configurations appear loaded.")
         try:
-            keep_alive() # Start the keep-alive Flask server (non-blocking thread)
+            keep_alive()
             logger.info("Keep_alive server thread initiated.")
         except Exception as e_ka:
-            logger.error(f"Could not start keep_alive server: {e_ka}", exc_info=True)
+            logger.error(f"Could not start keep_alive: {e_ka}", exc_info=True)
         
-        try:
-            run_telegram_bot_application()
-        except KeyboardInterrupt:
-            logger.info("Bot process stopped by user (Ctrl+C).")
-        except Exception as e_main_bot:
-            logger.critical(f"UNHANDLED EXCEPTION in main bot execution scope: {e_main_bot}", exc_info=True)
-
-    logger.info("Script execution finished or bot has been stopped.")
+        try: run_telegram_bot_application()
+        except KeyboardInterrupt: logger.info("Bot process stopped by user (Ctrl+C).")
+        except Exception as e_main: logger.critical(f"UNHANDLED EXCEPTION in main: {e_main}", exc_info=True)
+    logger.info("Script execution finished or bot stopped.")
